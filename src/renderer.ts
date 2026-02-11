@@ -16,6 +16,7 @@ type RenderState = {
 };
 
 const BAR_WIDTH = 22;
+export const MARQUEE_WIDTH = 3;
 
 export function renderProgressLine(
   state: {
@@ -71,9 +72,6 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     ? brandText
     : gradient(...config.theme.brand).multiline(brandText);
   const separators = useUnicode ? config.ui.separators.unicode : config.ui.separators.ascii;
-  const FRAME_WIDTH = 3;
-  const FRAME_MIN_HEIGHT = 8;
-  const FRAME_MAX_HEIGHT = 16;
   const baseDot = useUnicode ? "·" : ".";
   const highlightDot = useUnicode ? "•" : "o";
   const baseDotCell = options.noColor ? baseDot : chalkInstance.gray.dim(baseDot);
@@ -81,8 +79,6 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     ? highlightDot
     : chalkInstance.hex(config.theme.accent)(highlightDot);
   let frameIndex = 0;
-  let lastFrameRows: number | null = null;
-  let lastFrameHeight: number | null = null;
 
   const update = createLogUpdate(process.stdout, { showCursor: false });
   let hasRendered = false;
@@ -103,43 +99,11 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     startTime: Date.now()
   };
 
-  const clamp = (value: number, min: number, max: number) =>
-    Math.max(min, Math.min(max, value));
-
-  const computeFrameHeight = (rows: number) => {
-    const maxHeight = Math.min(rows, FRAME_MAX_HEIGHT);
-    const minHeight = Math.min(FRAME_MIN_HEIGHT, maxHeight);
-    return clamp(Math.floor(rows * 0.6), minHeight, maxHeight);
-  };
-
-  const buildPerimeter = (height: number) => {
-    const width = FRAME_WIDTH;
-    const coords: Array<[number, number]> = [];
-    for (let x = 0; x < width; x += 1) coords.push([0, x]);
-    for (let y = 1; y < height - 1; y += 1) coords.push([y, width - 1]);
-    if (height > 1) {
-      for (let x = width - 1; x >= 0; x -= 1) coords.push([height - 1, x]);
-    }
-    for (let y = height - 2; y >= 1; y -= 1) coords.push([y, 0]);
-    return coords;
-  };
-
-  const renderFrameLines = (rows: number) => {
-    const height = computeFrameHeight(rows);
-    if (lastFrameRows !== rows || lastFrameHeight !== height) {
-      frameIndex = 0;
-      lastFrameRows = rows;
-      lastFrameHeight = height;
-    }
-    const perimeter = buildPerimeter(height);
-    const highlight = perimeter[frameIndex % perimeter.length];
-    const lines = Array.from({ length: height }, (_, row) => {
-      const cells = Array.from({ length: FRAME_WIDTH }, () => baseDotCell);
-      const hit = highlight && highlight[0] === row ? highlight[1] : -1;
-      if (hit >= 0) cells[hit] = highlightDotCell;
-      return cells.join("");
-    });
-    return { height, lines };
+  const renderMarquee = () => {
+    const index = frameIndex % MARQUEE_WIDTH;
+    return Array.from({ length: MARQUEE_WIDTH }, (_, i) =>
+      i === index ? highlightDotCell : baseDotCell
+    ).join("");
   };
 
   function render() {
@@ -147,8 +111,6 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
       return;
     }
 
-    const terminalRows = typeof process.stdout.rows === "number" ? process.stdout.rows : 24;
-    const frameLines = renderFrameLines(terminalRows).lines;
     const elapsedMs = Date.now() - state.startTime;
     const line = renderProgressLine(
       {
@@ -163,11 +125,8 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     );
     const spinner = useUnicode ? config.ui.spinnerFrames[spinnerIndex] ?? "" : "";
     const baseLine = spinner ? `${spinner} ${line}` : line;
-    const mergeFrameLines = (contentLines: string[]) =>
-      frameLines.map((frameLine, index) => {
-        const content = contentLines[index];
-        return content ? `${frameLine} ${content}` : frameLine;
-      });
+    const marquee = renderMarquee();
+    const marqueePad = " ".repeat(MARQUEE_WIDTH + 1);
     if (lastLogMessage) {
       const statusColor =
         lastLogLevel === "success"
@@ -185,9 +144,10 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
       const statusLine = lastStatusLabel
         ? `${statusLabel} | ${lastLogMessage}`
         : `${statusLabel} | ${state.stepTitle}${stepJoiner}${lastLogMessage}`;
-      update(mergeFrameLines([baseLine, statusLine]).join("\n"));
+      const progressLine = `${marquee} ${baseLine}`;
+      update([progressLine, `${marqueePad}${statusLine}`].join("\n"));
     } else {
-      update(mergeFrameLines([baseLine]).join("\n"));
+      update(`${marquee} ${baseLine}`);
     }
     hasRendered = true;
   }

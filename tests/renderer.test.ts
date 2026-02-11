@@ -1,18 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { createLogUpdate } from "log-update";
-import { createRenderer, renderProgressLine } from "../src/renderer.js";
+import { createRenderer, renderProgressLine, MARQUEE_WIDTH } from "../src/renderer.js";
 import { defaultTheme, parseConfig } from "../src/config.js";
 
 const baseUi = parseConfig({ steps: [{ id: "base", title: "Base" }] }).ui;
 const BELOW_ZERO = -5;
 const ABOVE_HUNDRED = 120;
-const ROUND_LABEL_UP = 33.6; // Rounds to 34 for label rounding coverage.
-const ROUND_BAR_DOWN = 2.3; // Rounds to 2 for bar-length rounding coverage.
-const ROUND_LABEL_DOWN_BELOW_FULL = 99.4; // Rounds to 99 so bar remains below full.
-const ROUND_LABEL_UP_TO_FULL = 99.6; // Rounds to 100 so bar reaches full.
-const TEN_PERCENT = 10;
+const MARQUEE_CHARS = ["·", "•", ".", "o"];
+const MARQUEE_ASCII_CHARS = MARQUEE_CHARS.filter(
+  (char) => char.charCodeAt(0) <= 0x7f
+);
 const stripAnsi = (value: string) => value.replace(/\u001b\[[0-9;]*m/g, "");
+const hasProgressBar = (line: string) => /\[[^\]]*\]/.test(stripAnsi(line));
+const hasSeparator = (line: string) => stripAnsi(line).includes(" | ");
+const getContentLines = (lines: string[], brandLabel: string) =>
+  lines.filter(
+    (line) => line.includes(brandLabel) || hasProgressBar(line) || hasSeparator(line)
+  );
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const marqueeCharClass = (chars: string[]) => chars.map(escapeRegex).join("");
+const createMarqueePrefixRegex = (chars: string[], width: number) =>
+  // Prefix is <width> marquee chars followed by a space.
+  new RegExp(`^[${marqueeCharClass(chars)}]{${width}}\\s`);
+const marqueePrefixRegex = createMarqueePrefixRegex(MARQUEE_CHARS, MARQUEE_WIDTH);
+const marqueeAsciiPrefixRegex = createMarqueePrefixRegex(
+  MARQUEE_ASCII_CHARS,
+  MARQUEE_WIDTH
+);
+const marqueeLeadingCharRegex = new RegExp(`^[${marqueeCharClass(MARQUEE_CHARS)}]`);
 const getBarContent = (line: string) => {
   const barMatch = stripAnsi(line).match(/\[([^\]]*)\]/);
   if (!barMatch) {
@@ -32,36 +48,77 @@ const setRows = (rows: number) => {
   };
 };
 
-const renderWith = ({ isTTY, rows }: { isTTY: boolean; rows: number }) => {
-  const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
-  const restoreRows = setRows(rows);
-  const renderer = createRenderer(config, { noColor: true, isTTY, verbose: true });
-  const emitter = new EventEmitter();
-  renderer.attach(emitter);
-
-  if (!isTTY) {
-    const output = stripAnsi(
-      renderProgressLine(
-        {
-          percent: 0,
-          stepTitle: "One",
-          stepIndex: 0,
-          totalSteps: 1,
-          elapsedMs: 0
-        },
-        config.theme,
-        { noColor: true, brandLabel: config.ui.brandLabel, ui: config.ui }
-      )
-    );
-    restoreRows();
-    return { output, lines: output.split("\n") };
-  }
-
-  const update = vi.mocked(createLogUpdate).mock.results.slice(-1)[0]?.value;
+const getUpdateMock = (index?: number) => {
+  const results = vi.mocked(createLogUpdate).mock.results;
+  const targetIndex = index ?? results.length - 1;
+  const update = results[targetIndex]?.value;
   if (!update) {
-    restoreRows();
     throw new Error("log-update mock was not initialized");
   }
+  return update;
+};
+
+const setupTtyRenderer = ({
+  config = parseConfig({ steps: [{ id: "one", title: "One" }] }),
+  rows,
+  rendererOptions = {},
+  updateIndex
+}: {
+  config?: ReturnType<typeof parseConfig>;
+  rows?: number;
+  rendererOptions?: Parameters<typeof createRenderer>[1];
+  updateIndex?: number;
+} = {}) => {
+  const restoreRows = rows === undefined ? () => {} : setRows(rows);
+  const renderer = createRenderer(config, {
+    noColor: true,
+    isTTY: true,
+    verbose: true,
+    ...rendererOptions
+  });
+  const emitter = new EventEmitter();
+  renderer.attach(emitter);
+  const update = getUpdateMock(updateIndex);
+  return { config, emitter, update, restoreRows };
+};
+
+const renderNonTtyOutput = ({ rows }: { rows: number }) => {
+  const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
+  const restoreRows = setRows(rows);
+  const renderer = createRenderer(config, {
+    noColor: true,
+    isTTY: false,
+    verbose: true
+  });
+  const emitter = new EventEmitter();
+  const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  renderer.attach(emitter);
+  emitter.emit("step:progress", {
+    step: config.steps[0],
+    index: 0,
+    completedWeight: 0,
+    totalWeight: 1,
+    percent: 0
+  });
+  emitter.emit("step:log", {
+    step: config.steps[0],
+    index: 0,
+    completedWeight: 0,
+    totalWeight: 1,
+    percent: 0,
+    level: "info",
+    message: "Checking env"
+  });
+
+  const output = stripAnsi(String(consoleSpy.mock.calls.slice(-1)[0]?.[0] ?? ""));
+  consoleSpy.mockRestore();
+  restoreRows();
+  return { output };
+};
+
+const renderTtyOutput = ({ rows }: { rows: number }) => {
+  const { config, emitter, update, restoreRows } = setupTtyRenderer({ rows });
 
   emitter.emit("step:progress", {
     step: config.steps[0],
@@ -73,9 +130,10 @@ const renderWith = ({ isTTY, rows }: { isTTY: boolean; rows: number }) => {
 
   const calls = update.mock.calls;
   const output = stripAnsi(String(calls[calls.length - 1]?.[0] ?? ""));
+  const lines = getContentLines(output.split("\n"), config.ui.brandLabel);
   emitter.emit("run:complete");
   restoreRows();
-  return { output, lines: output.split("\n") };
+  return { output, lines };
 };
 
 vi.mock("log-update", () => {
@@ -114,7 +172,7 @@ describe("renderer", () => {
   });
 
   it("clamps and rounds percent label", () => {
-    const percentRoundsUp = ROUND_LABEL_UP;
+    const percentRoundsUp = 33.6; // Rounds to 34 for label rounding coverage.
     const line = renderProgressLine(
       {
         percent: percentRoundsUp,
@@ -159,7 +217,7 @@ describe("renderer", () => {
   });
 
   it("uses rounded percent for bar length", () => {
-    const percentRoundsDown = ROUND_BAR_DOWN;
+    const percentRoundsDown = 2.3; // Rounds to 2 for bar-length rounding coverage.
     const baseLine = renderProgressLine(
       {
         percent: 0,
@@ -190,7 +248,7 @@ describe("renderer", () => {
   });
 
   it("rounds label to 99 percent while bar stays below full", () => {
-    const percentRoundsDownBelowFull = ROUND_LABEL_DOWN_BELOW_FULL;
+    const percentRoundsDownBelowFull = 99.4; // Rounds to 99 so bar remains below full.
     const line = renderProgressLine(
       {
         percent: percentRoundsDownBelowFull,
@@ -212,7 +270,7 @@ describe("renderer", () => {
 
   it("shows incomplete segment for 99.4 percent without glow", () => {
     const ui = { ...baseUi, animation: { ...baseUi.animation, glowWidth: 0 } };
-    const percentRoundsDownBelowFull = ROUND_LABEL_DOWN_BELOW_FULL;
+    const percentRoundsDownBelowFull = 99.4; // Rounds to 99 so bar remains below full.
     const line = renderProgressLine(
       {
         percent: percentRoundsDownBelowFull,
@@ -233,7 +291,7 @@ describe("renderer", () => {
 
   it("fills bar when label rounds to 100 percent without glow", () => {
     const ui = { ...baseUi, animation: { ...baseUi.animation, glowWidth: 0 } };
-    const percentRoundsUpToFull = ROUND_LABEL_UP_TO_FULL;
+    const percentRoundsUpToFull = 99.6; // Rounds to 100 so bar reaches full.
     const line = renderProgressLine(
       {
         percent: percentRoundsUpToFull,
@@ -275,6 +333,7 @@ describe("renderer", () => {
       unicode: true,
       animation: { ...baseUi.animation, glowWidth: 4 }
     };
+    const tenPercent = 10;
     const baseLine = renderProgressLine(
       {
         percent: 0,
@@ -289,7 +348,7 @@ describe("renderer", () => {
     const barWidth = getBarContent(baseLine).length;
     const line = renderProgressLine(
       {
-        percent: TEN_PERCENT,
+        percent: tenPercent,
         stepTitle: "Installing dependencies",
         stepIndex: 0,
         totalSteps: 3,
@@ -300,7 +359,7 @@ describe("renderer", () => {
     );
 
     const barContent = getBarContent(line);
-    const completeLength = Math.round((TEN_PERCENT / 100) * barWidth);
+    const completeLength = Math.round((tenPercent / 100) * barWidth);
 
     const glowChar = ui.barChars.glow;
     expect(barContent.slice(0, completeLength)).toContain(glowChar);
@@ -325,11 +384,7 @@ describe("renderer", () => {
     const emitter = new EventEmitter();
     renderer.attach(emitter);
 
-    const updateResults = vi.mocked(createLogUpdate).mock.results;
-    const update = updateResults[updateResults.length - 1]?.value;
-    if (!update) {
-      throw new Error("log-update mock was not initialized");
-    }
+    const update = getUpdateMock();
 
     vi.setSystemTime(new Date("2020-01-01T00:00:20Z"));
     emitter.emit("step:progress", {
@@ -364,23 +419,15 @@ describe("renderer", () => {
     vi.useRealTimers();
   });
 
-  it("renders status line under progress after log event", () => {
-    const restoreRows = setRows(24);
+  it("does not exceed two lines in TTY mode", () => {
     const config = parseConfig({
       steps: [{ id: "prepare", title: "Prepare", weight: 1 }]
     });
-    const renderer = createRenderer(config, {
-      noColor: true,
-      isTTY: true,
-      verbose: true
+    const { emitter, update, restoreRows } = setupTtyRenderer({
+      config,
+      rows: 24,
+      updateIndex: 0
     });
-    const emitter = new EventEmitter();
-    renderer.attach(emitter);
-
-    const update = vi.mocked(createLogUpdate).mock.results[0]?.value;
-    if (!update) {
-      throw new Error("log-update mock was not initialized");
-    }
 
     emitter.emit("step:start", {
       step: config.steps[0],
@@ -403,29 +450,23 @@ describe("renderer", () => {
     expect(calls.length).toBeGreaterThan(0);
     const output = stripAnsi(String(calls[calls.length - 1][0]));
     const lines = output.split("\n");
-    expect(lines.length).toBeGreaterThanOrEqual(2);
-    expect(lines.length).toBeLessThanOrEqual(16);
+    expect(lines.length).toBeLessThanOrEqual(2);
+    expect(lines.length).toBe(2);
     expect(lines[1]).toContain("STATUS | Prepare — Checking env");
     emitter.emit("run:complete");
     restoreRows();
   });
 
   it("uses ascii joiner when unicode is disabled", () => {
-    const restoreRows = setRows(24);
     const config = parseConfig({
       steps: [{ id: "prepare", title: "Prepare", weight: 1 }]
     });
-    const renderer = createRenderer(
-      { ...config, ui: { ...config.ui, unicode: false } },
-      { noColor: true, isTTY: true, verbose: true }
-    );
-    const emitter = new EventEmitter();
-    renderer.attach(emitter);
-
-    const update = vi.mocked(createLogUpdate).mock.results[0]?.value;
-    if (!update) {
-      throw new Error("log-update mock was not initialized");
-    }
+    const rendererConfig = { ...config, ui: { ...config.ui, unicode: false } };
+    const { emitter, update, restoreRows } = setupTtyRenderer({
+      config: rendererConfig,
+      rows: 24,
+      updateIndex: 0
+    });
 
     emitter.emit("step:start", {
       step: config.steps[0],
@@ -448,84 +489,77 @@ describe("renderer", () => {
     expect(calls.length).toBeGreaterThan(0);
     const output = stripAnsi(String(calls[calls.length - 1][0]));
     const lines = output.split("\n");
-    expect(lines.length).toBeGreaterThanOrEqual(2);
-    expect(lines.length).toBeLessThanOrEqual(16);
-    expect(lines[1]).toContain("STATUS | Prepare - Checking env");
+    const contentLines = getContentLines(lines, config.ui.brandLabel);
+    expect(contentLines.length).toBeLessThanOrEqual(2);
+    expect(contentLines.length).toBe(2);
+    expect(contentLines[1]).toContain("STATUS | Prepare - Checking env");
     emitter.emit("run:complete");
     restoreRows();
   });
 
-  it("renders a left frame in TTY mode", () => {
-    const output = renderWith({ isTTY: true, rows: 24 });
-
-    const progressLine = output.lines[0] ?? "";
-    expect(progressLine).toMatch(/^[·•.o]{3}\s/);
-  });
-
-  it("uses ascii dots when unicode is disabled", () => {
-    const restoreRows = setRows(24);
-    const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
-    const renderer = createRenderer(
-      { ...config, ui: { ...config.ui, unicode: false } },
-      { noColor: true, isTTY: true, verbose: true }
-    );
-    const emitter = new EventEmitter();
-    renderer.attach(emitter);
-
-    const update = vi.mocked(createLogUpdate).mock.results[0]?.value;
-    if (!update) {
-      throw new Error("log-update mock was not initialized");
-    }
-
-    emitter.emit("step:progress", {
-      step: config.steps[0],
-      index: 0,
-      completedWeight: 0,
-      totalWeight: 1,
-      percent: 0
+  describe("renderer marquee", () => {
+    it("renders a one-line marquee prefix", () => {
+      const output = renderTtyOutput({ rows: 24 });
+      const lines = output.lines;
+      const progressLine = lines[0] ?? "";
+      expect(lines.length).toBeLessThanOrEqual(2);
+      expect(progressLine).toMatch(marqueePrefixRegex);
     });
 
-    const calls = update.mock.calls;
-    const output = stripAnsi(String(calls[calls.length - 1]?.[0] ?? ""));
-    const progressLine = output.split("\n")[0] ?? "";
+    it("keeps one line in TTY mode without status", () => {
+      const config = parseConfig({ steps: [{ id: "prepare", title: "Prepare" }] });
+      const { emitter, update } = setupTtyRenderer({ config, updateIndex: 0 });
 
-    expect(progressLine).toMatch(/^[.o·•]{3}\s/);
-    emitter.emit("run:complete");
-    restoreRows();
-  });
+      emitter.emit("step:progress", {
+        step: config.steps[0],
+        index: 0,
+        completedWeight: 0,
+        totalWeight: 1,
+        percent: 0
+      });
 
-  it("uses 60 percent of rows when within clamp range", () => {
-    const rows = 20;
-    const expected = Math.floor(rows * 0.6);
-    const output = renderWith({ isTTY: true, rows });
+      const output = stripAnsi(String(update.mock.calls.slice(-1)[0]?.[0] ?? ""));
+      const lines = output.split("\n");
+      const progressLine = lines[0] ?? "";
+      const statusLine = lines[1] ?? "";
+      expect(lines.length).toBeLessThanOrEqual(2);
+      expect(lines.length).toBe(1);
+      expect(progressLine).toMatch(marqueeLeadingCharRegex);
+      expect(statusLine).toBe("");
+      emitter.emit("run:complete");
+    });
 
-    expect(output.lines.length).toBe(expected);
-  });
+    it("uses ascii dots when unicode is disabled", () => {
+      const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
+      const rendererConfig = { ...config, ui: { ...config.ui, unicode: false } };
+      const { emitter, update, restoreRows } = setupTtyRenderer({
+        config: rendererConfig,
+        rows: 24,
+        updateIndex: 0
+      });
 
-  it("clamps frame height", () => {
-    const minRows = 8;
-    const oversizedRows = 60;
-    const maxHeight = 16;
-    const small = renderWith({ isTTY: true, rows: minRows });
-    const large = renderWith({ isTTY: true, rows: oversizedRows });
+      emitter.emit("step:progress", {
+        step: config.steps[0],
+        index: 0,
+        completedWeight: 0,
+        totalWeight: 1,
+        percent: 0
+      });
 
-    expect(small.lines.length).toBeGreaterThanOrEqual(minRows);
-    expect(small.lines.length).toBeLessThanOrEqual(minRows);
-    expect(large.lines.length).toBeGreaterThanOrEqual(minRows);
-    expect(large.lines.length).toBeLessThanOrEqual(maxHeight);
-  });
+      const calls = update.mock.calls;
+      const output = stripAnsi(String(calls[calls.length - 1]?.[0] ?? ""));
+      const progressLine = output.split("\n")[0] ?? "";
 
-  it("caps frame height at terminal rows", () => {
-    const rows = 4;
-    const output = renderWith({ isTTY: true, rows });
+      expect(progressLine).toMatch(marqueeAsciiPrefixRegex);
+      emitter.emit("run:complete");
+      restoreRows();
+    });
 
-    expect(output.lines.length).toBeLessThanOrEqual(rows);
-  });
+    it("skips frame when not TTY", () => {
+      const output = renderNonTtyOutput({ rows: 24 });
 
-  it("skips frame when not TTY", () => {
-    const output = renderWith({ isTTY: false, rows: 24 });
-
-    expect(output.lines[0]).not.toMatch(/^\.+\s/);
+      expect(output.output).not.toMatch(marqueeLeadingCharRegex);
+    });
   });
 
   it("uses frameTickMs for animation interval when available", () => {

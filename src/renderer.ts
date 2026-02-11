@@ -71,10 +71,15 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     ? brandText
     : gradient(...config.theme.brand).multiline(brandText);
   const separators = useUnicode ? config.ui.separators.unicode : config.ui.separators.ascii;
-  const FRAME_WIDTH = 4;
-  const FRAME_MIN_HEIGHT = 6;
-  const FRAME_MAX_HEIGHT = 12;
-  const highlightChar = useUnicode ? "•" : "o";
+  const FRAME_WIDTH = 3;
+  const FRAME_MIN_HEIGHT = 8;
+  const FRAME_MAX_HEIGHT = 16;
+  const baseDot = useUnicode ? "·" : ".";
+  const highlightDot = useUnicode ? "•" : "o";
+  const baseDotCell = options.noColor ? baseDot : chalkInstance.gray.dim(baseDot);
+  const highlightDotCell = options.noColor
+    ? highlightDot
+    : chalkInstance.hex(config.theme.accent)(highlightDot);
   let frameIndex = 0;
   let lastFrameRows: number | null = null;
   let lastFrameHeight: number | null = null;
@@ -104,7 +109,7 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
   const computeFrameHeight = (rows: number) => {
     const maxHeight = Math.min(rows, FRAME_MAX_HEIGHT);
     const minHeight = Math.min(FRAME_MIN_HEIGHT, maxHeight);
-    return clamp(Math.floor(rows * 0.5), minHeight, maxHeight);
+    return clamp(Math.floor(rows * 0.6), minHeight, maxHeight);
   };
 
   const buildPerimeter = (height: number) => {
@@ -129,9 +134,9 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     const perimeter = buildPerimeter(height);
     const highlight = perimeter[frameIndex % perimeter.length];
     const lines = Array.from({ length: height }, (_, row) => {
-      const cells = Array.from({ length: FRAME_WIDTH }, () => ".");
+      const cells = Array.from({ length: FRAME_WIDTH }, () => baseDotCell);
       const hit = highlight && highlight[0] === row ? highlight[1] : -1;
-      if (hit >= 0) cells[hit] = highlightChar;
+      if (hit >= 0) cells[hit] = highlightDotCell;
       return cells.join("");
     });
     return { height, lines };
@@ -191,6 +196,7 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
     if (!options.isTTY || animationTimer || paused) {
       return;
     }
+    const frameTickMs = config.ui.animation.frameTickMs ?? config.ui.animation.tickMs;
     animationTimer = setInterval(() => {
       spinnerIndex = (spinnerIndex + 1) % config.ui.spinnerFrames.length;
       const safePercent = Number.isFinite(state.percent) ? state.percent : 0;
@@ -201,7 +207,7 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
       glowOffset = maxGlowOffset > 0 ? (glowOffset + 1) % (maxGlowOffset + 1) : 0;
       frameIndex += 1;
       render();
-    }, config.ui.animation.tickMs);
+    }, frameTickMs);
   }
 
   function stopAnimation() {

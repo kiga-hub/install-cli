@@ -404,7 +404,7 @@ describe("renderer", () => {
     const output = stripAnsi(String(calls[calls.length - 1][0]));
     const lines = output.split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(2);
-    expect(lines.length).toBeLessThanOrEqual(12);
+    expect(lines.length).toBeLessThanOrEqual(16);
     expect(lines[1]).toContain("STATUS | Prepare — Checking env");
     emitter.emit("run:complete");
     restoreRows();
@@ -449,7 +449,7 @@ describe("renderer", () => {
     const output = stripAnsi(String(calls[calls.length - 1][0]));
     const lines = output.split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(2);
-    expect(lines.length).toBeLessThanOrEqual(12);
+    expect(lines.length).toBeLessThanOrEqual(16);
     expect(lines[1]).toContain("STATUS | Prepare - Checking env");
     emitter.emit("run:complete");
     restoreRows();
@@ -459,19 +459,60 @@ describe("renderer", () => {
     const output = renderWith({ isTTY: true, rows: 24 });
 
     const progressLine = output.lines[0] ?? "";
-    expect(progressLine).toMatch(/^[.o•]{4}\s/);
+    expect(progressLine).toMatch(/^[·•.o]{3}\s/);
+  });
+
+  it("uses ascii dots when unicode is disabled", () => {
+    const restoreRows = setRows(24);
+    const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
+    const renderer = createRenderer(
+      { ...config, ui: { ...config.ui, unicode: false } },
+      { noColor: true, isTTY: true, verbose: true }
+    );
+    const emitter = new EventEmitter();
+    renderer.attach(emitter);
+
+    const update = vi.mocked(createLogUpdate).mock.results[0]?.value;
+    if (!update) {
+      throw new Error("log-update mock was not initialized");
+    }
+
+    emitter.emit("step:progress", {
+      step: config.steps[0],
+      index: 0,
+      completedWeight: 0,
+      totalWeight: 1,
+      percent: 0
+    });
+
+    const calls = update.mock.calls;
+    const output = stripAnsi(String(calls[calls.length - 1]?.[0] ?? ""));
+    const progressLine = output.split("\n")[0] ?? "";
+
+    expect(progressLine).toMatch(/^[.o·•]{3}\s/);
+    emitter.emit("run:complete");
+    restoreRows();
+  });
+
+  it("uses 60 percent of rows when within clamp range", () => {
+    const rows = 20;
+    const expected = Math.floor(rows * 0.6);
+    const output = renderWith({ isTTY: true, rows });
+
+    expect(output.lines.length).toBe(expected);
   });
 
   it("clamps frame height", () => {
-    const minRows = 6;
+    const minRows = 8;
     const oversizedRows = 60;
+    const maxHeight = 16;
     const small = renderWith({ isTTY: true, rows: minRows });
     const large = renderWith({ isTTY: true, rows: oversizedRows });
 
-    expect(small.lines.length).toBeGreaterThanOrEqual(6);
+    expect(small.lines.length).toBeGreaterThanOrEqual(minRows);
     expect(small.lines.length).toBeLessThanOrEqual(minRows);
-    expect(large.lines.length).toBeGreaterThanOrEqual(6);
-    expect(large.lines.length).toBeLessThanOrEqual(12);
+    expect(large.lines.length).toBeGreaterThanOrEqual(minRows);
+    expect(large.lines.length).toBeLessThanOrEqual(maxHeight);
   });
 
   it("caps frame height at terminal rows", () => {
@@ -485,6 +526,48 @@ describe("renderer", () => {
     const output = renderWith({ isTTY: false, rows: 24 });
 
     expect(output.lines[0]).not.toMatch(/^\.+\s/);
+  });
+
+  it("uses frameTickMs for animation interval when available", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
+    const frameTickMs = 120;
+    const renderer = createRenderer(
+      { ...config, ui: { ...config.ui, animation: { ...config.ui.animation, frameTickMs } } },
+      { noColor: true, isTTY: true, verbose: true }
+    );
+    const emitter = new EventEmitter();
+    renderer.attach(emitter);
+
+    expect(setIntervalSpy).toHaveBeenCalled();
+    const intervalMs = setIntervalSpy.mock.calls[0]?.[1];
+    expect(intervalMs).toBe(frameTickMs);
+
+    emitter.emit("run:complete");
+    setIntervalSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("falls back to tickMs when frameTickMs is missing", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
+    const { frameTickMs: _frameTickMs, ...animation } = config.ui.animation;
+    const renderer = createRenderer(
+      { ...config, ui: { ...config.ui, animation } },
+      { noColor: true, isTTY: true, verbose: true }
+    );
+    const emitter = new EventEmitter();
+    renderer.attach(emitter);
+
+    expect(setIntervalSpy).toHaveBeenCalled();
+    const intervalMs = setIntervalSpy.mock.calls[0]?.[1];
+    expect(intervalMs).toBe(config.ui.animation.tickMs);
+
+    emitter.emit("run:complete");
+    setIntervalSpy.mockRestore();
+    vi.useRealTimers();
   });
 });
 

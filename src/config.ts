@@ -87,9 +87,10 @@ const UiSchema = z
   animation: z
     .object({
       tickMs: z.number().int().positive().default(() => 90),
-      glowWidth: z.number().int().positive().default(() => 4)
+      glowWidth: z.number().int().positive().default(() => 4),
+      frameTickMs: z.number().int().positive().default(() => 140)
     })
-    .default(() => ({ tickMs: 90, glowWidth: 4 }))
+    .default(() => ({ tickMs: 90, glowWidth: 4, frameTickMs: 140 }))
   })
   .default(() => ({
     unicode: true,
@@ -97,7 +98,7 @@ const UiSchema = z
     spinnerFrames: ["⟡", "⟢", "⟣", "⟤"],
     barChars: { full: "█", empty: "░", glow: "▓" },
     separators: { unicode: " • ", ascii: " | " },
-    animation: { tickMs: 90, glowWidth: 4 }
+    animation: { tickMs: 90, glowWidth: 4, frameTickMs: 140 }
   }));
 
 const ConfigSchema = z.object({

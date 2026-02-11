@@ -15,7 +15,7 @@ export type UiConfig = {
   spinnerFrames: string[];
   barChars: { full: string; empty: string; glow: string };
   separators: { unicode: string; ascii: string };
-  animation: { tickMs: number; glowWidth: number };
+  animation: { tickMs: number; frameTickMs: number; glowWidth: number };
 };
 
 export type StepLog = {

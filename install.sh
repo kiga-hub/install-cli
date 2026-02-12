@@ -1,8 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_URL="https://github.com/anomalyco/installer-cli.git"
-INSTALL_SCRIPT="npm run dev -- install --config config/steps.json --verbose"
+REPO_URL="https://github.com/kiga-hub/install-cli.git"
 
 # Colors for output
 RED='\033[0;31m'
@@ -11,18 +10,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
-
-echo ""
-echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║${NC}        ${GREEN}OpenInstall - CLI Installer${NC}                    ${CYAN}║${NC}"
-echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
-echo ""
-
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-    echo -e "${RED}✖${NC} Please run as root (use sudo)"
-    exit 1
-fi
 
 print_step() {
     echo -e "${BLUE}→${NC} $1"
@@ -39,6 +26,27 @@ print_error() {
 print_info() {
     echo -e "${YELLOW}ℹ${NC} $1"
 }
+
+# Re-run with sudo if not root and has sudo access
+if [ "$EUID" -ne 0 ]; then
+    if sudo -n true 2>/dev/null; then
+        # Has passwordless sudo, re-execute
+        exec sudo "$0" "$@"
+        exit 0
+    else
+        print_error "This script requires root privileges"
+        echo ""
+        print_info "Please run with sudo:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/kiga-hub/install-cli/master/install.sh | sudo bash"
+        exit 1
+    fi
+fi
+
+echo ""
+echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║${NC}        ${GREEN}OpenInstall - CLI Installer${NC}                    ${CYAN}║${NC}"
+echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
+echo ""
 
 # Detect OS
 print_step "Detecting OS..."
@@ -61,7 +69,7 @@ if ! command -v node &> /dev/null; then
     case "$OS_ID" in
         ubuntu|debian)
             curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - > /dev/null 2>&1
-            apt-get install -y nodejs > /dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs > /dev/null 2>&1
             ;;
         centos|rhel|fedora)
             curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - > /dev/null 2>&1
@@ -87,8 +95,8 @@ if ! command -v git &> /dev/null; then
     print_info "git not found, installing..."
     case "$OS_ID" in
         ubuntu|debian)
-            apt-get update -qq > /dev/null 2>&1
-            apt-get install -y git > /dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get update -qq > /dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git > /dev/null 2>&1
             ;;
         centos|rhel|fedora)
             yum install -y git > /dev/null 2>&1 || dnf install -y git > /dev/null 2>&1
@@ -103,14 +111,12 @@ else
 fi
 
 echo ""
-print_step "Cloning installer-cli..."
+print_step "Cloning install-cli..."
 TEMP_DIR=$(mktemp -d)
 git clone --depth 1 "$REPO_URL" "$TEMP_DIR" 2>/dev/null || {
     print_error "Failed to clone repository"
-    print_info "Trying alternative method..."
-    
     cd "$TEMP_DIR"
-    curl -fsSL "$REPO_URL" -o repo.tar.gz 2>/dev/null || wget -q "$REPO_URL" -O repo.tar.gz 2>/dev/null || {
+    curl -fsSL "$REPO_URL" -o repo.tar.gz 2>/dev/null || {
         print_error "Could not download repository"
         rm -rf "$TEMP_DIR"
         exit 1
@@ -122,9 +128,9 @@ cd "$TEMP_DIR"
 echo ""
 
 print_step "Installing dependencies..."
-npm install 2>&1 | while IFS= read -r line; do
-    echo -e "  ${YELLOW}ℹ${NC} ${line:0:80}"
-done
+npm install --silent 2>&1 | grep -v "^$" | while IFS= read -r line; do
+    [ -n "$line" ] && echo -e "  ${YELLOW}ℹ${NC} ${line:0:80}"
+done 2>/dev/null || true
 
 echo ""
 print_success "Dependencies installed"

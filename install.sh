@@ -141,7 +141,9 @@ print_step "Running installer..."
 echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
 echo ""
 
-npm run dev -- install --config config/steps.json --auto --verbose
+# Auto-advance in non-interactive mode
+export CLI_PROMPT_CHOICE="next"
+npm run dev -- install --config config/steps.json --verbose
 
 EXIT_CODE=$?
 

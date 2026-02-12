@@ -300,6 +300,15 @@ export function createChoicePrompt({ title }: ChoicePromptOptions, noColor = fal
 
   const open = () =>
     new Promise<Choice>((resolve, reject) => {
+      // Check if we're in a TTY environment
+      const isInTTY = process.stdin.isTTY && process.stdout.isTTY;
+      
+      if (!isInTTY) {
+        // In non-TTY environment, automatically continue with "auto"
+        resolve("auto");
+        return;
+      }
+      
       resolveChoice = resolve;
       rejectChoice = reject;
       active = true;

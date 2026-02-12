@@ -136,14 +136,13 @@ echo ""
 print_success "Dependencies installed"
 echo ""
 
-# Run the installer
+# Run the installer with --auto for non-interactive mode
 print_step "Running installer..."
 echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
 echo ""
 
-# Auto-advance in non-interactive mode
-export CLI_PROMPT_CHOICE="next"
-npm run dev -- install --config config/steps.json --verbose
+# Use --auto flag for script usage, but show instructions for interactive use
+npm run dev -- install --config config/steps.json --auto --verbose
 
 EXIT_CODE=$?
 

@@ -2,6 +2,10 @@
 
 Installer-style CLI with a single-line progress bar, colorful emphasis, and structured logs.
 
+```bash
+curl -fsSL  https://raw.githubusercontent.com/kiga-hub/install-cli/master/install.sh | sudo bash
+```
+
 ## Quick Start
 
 ```bash

@@ -1,4 +1,5 @@
 import terminalKit from "terminal-kit";
+import chalk from "chalk";
 
 type Choice = "next" | "auto" | "back";
 
@@ -22,18 +23,18 @@ type ButtonLayout = {
   width: number;
 };
 
+type InlineLayout = {
+  row: number;
+  line: string;
+  pills: { id: Choice; left: number; right: number; text: string }[];
+};
+
 const terminal = terminalKit.terminal;
 const buttons: Button[] = [
   { id: "back", label: " Back " },
   { id: "auto", label: " Auto " },
   { id: "next", label: " Next " }
 ];
-
-type InlineLayout = {
-  row: number;
-  line: string;
-  pills: { id: Choice; left: number; right: number; text: string }[];
-};
 
 const fullLabels = ["Back", "Auto", "Next"] as const;
 const shortLabels = ["Bk", "Au", "Nx"] as const;
@@ -64,7 +65,7 @@ const buildVariant = (
 export const computeInlineLayout = (cols: number, rows: number): InlineLayout => {
   const safeCols = Number.isFinite(cols) && cols > 0 ? cols : 80;
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 24;
-  const row = Math.max(1, safeRows);
+  const row = Math.max(1, safeRows - 1);
 
   const variants = [
     { prefix: true, short: false, gap: 2, padded: true },
@@ -83,13 +84,25 @@ export const computeInlineLayout = (cols: number, rows: number): InlineLayout =>
   return buildVariant(row, { prefix: false, short: true, gap: 1, padded: false });
 };
 
-const applyNeon = (focused: boolean) => {
-  if (focused) {
-    terminal.brightCyan();
-    terminal.bold();
-  } else {
-    terminal.cyan();
+const RESET = "\x1b[0m";
+const SOFT_YELLOW = "\x1b[38;5;223m";
+
+const rainbowColors = ["#ff0000", "#ff7f00", "#ffff00", "#00ff00", "#0000ff", "#8b00ff"];
+
+const colorize = (text: string, index: number, hoverIndex: number, noColor: boolean) => {
+  if (noColor) {
+    return text;
   }
+  if (index === hoverIndex && hoverIndex >= 0) {
+    const chars = text.split("");
+    const colored = chars.map((char, i) => {
+      if (char === " ") return " ";
+      const colorIndex = Math.floor((i / chars.length) * rainbowColors.length) % rainbowColors.length;
+      return chalk.hex(rainbowColors[colorIndex])(char);
+    }).join("");
+    return colored;
+  }
+  return `${SOFT_YELLOW}${text}${RESET}`;
 };
 
 const hitTest = (layouts: ButtonLayout[], x: number, y: number, row: number) =>
@@ -97,11 +110,13 @@ const hitTest = (layouts: ButtonLayout[], x: number, y: number, row: number) =>
     ? layouts.find((layout) => x >= layout.left && x <= layout.left + layout.width - 1)
     : undefined;
 
-export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt {
+export function createChoicePrompt({ title }: ChoicePromptOptions, noColor = false): ChoicePrompt {
   let resolveChoice: ((choice: Choice) => void) | null = null;
   let rejectChoice: ((error: Error) => void) | null = null;
   let active = false;
   let focusedIndex = 0;
+  let hoverIndex = -1;
+  let isMouseOverButtons = false;
   let layouts: ButtonLayout[] = [];
   let pulseInterval: ReturnType<typeof setInterval> | null = null;
   let flickerInterval: ReturnType<typeof setInterval> | null = null;
@@ -120,9 +135,13 @@ export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt
     }
     isHovering = false;
     hasFocus = false;
+    hoverIndex = -1;
+    isMouseOverButtons = false;
     if (lastRow !== null) {
       terminal.saveCursor();
       terminal.moveTo(1, lastRow);
+      terminal.eraseLine();
+      terminal.moveTo(1, lastRow + 1);
       terminal.eraseLine();
       terminal.restoreCursor();
     }
@@ -194,8 +213,8 @@ export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt
         cursor += prefixLength;
       }
 
-      applyNeon(index === focusedIndex);
-      terminal.noFormat(pill.text);
+      const coloredText = colorize(pill.text, index, hoverIndex, noColor);
+      terminal.noFormat(coloredText);
       cursor += pill.text.length;
 
       terminal.gray();
@@ -205,6 +224,15 @@ export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt
       terminal.noFormat(layout.line.slice(cursor - 1));
     }
 
+    terminal.restoreCursor();
+    
+    terminal.saveCursor();
+    terminal.moveTo(1, layout.row + 1);
+    terminal.eraseLine();
+    if (!noColor) {
+      terminal.noFormat("\x1b[90m");
+    }
+    terminal.noFormat("  Use TAB / Arrow keys to navigate, ENTER to select  ");
     terminal.restoreCursor();
   };
 
@@ -217,72 +245,39 @@ export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt
     resolveChoice?.(choice);
   };
 
-  const onKey = (name: string) => {
-    if (!active) {
-      return;
-    }
-    if (name === "TAB" || name === "RIGHT") {
-      focusedIndex = (focusedIndex + 1) % buttons.length;
-      render();
-      hasFocus = true;
-      updateTimerState();
-      return;
-    }
-    if (name === "SHIFT_TAB" || name === "LEFT") {
-      focusedIndex = (focusedIndex - 1 + buttons.length) % buttons.length;
-      render();
-      hasFocus = true;
-      updateTimerState();
-      return;
-    }
-    if (name === "ENTER") {
-      resolveAndCleanup(buttons[focusedIndex].id);
-      return;
-    }
-    if (name === "BACKSPACE") {
-      if (hasFocus) {
-        hasFocus = false;
-        updateTimerState();
-      }
-      return;
-    }
-    if (name === "ESCAPE" || name === "Q") {
-      resolveAndCleanup("back");
-      return;
-    }
-    if (name === "CTRL_C") {
-      active = false;
-      cleanup();
-      rejectChoice?.(new Error("choicePrompt cancelled"));
-    }
-  };
-
   const onMouse = (name: string, data: { x: number; y: number }) => {
     if (!active) {
       return;
     }
-    if (name !== "MOUSE_LEFT_BUTTON_PRESSED" && name !== "MOUSE_LEFT_BUTTON_RELEASED") {
-      if (name === "MOUSE_MOTION") {
-        const hovered = hitTest(layouts, data.x, data.y, lastRow ?? terminal.height);
-        if (hovered) {
-          const index = layouts.findIndex((item) => item.id === hovered.id);
-          if (index >= 0 && focusedIndex !== index) {
-            focusedIndex = index;
-            render();
-          }
-          if (!isHovering) {
-            isHovering = true;
-          }
-          updateTimerState();
-        } else {
-          if (isHovering) {
-            isHovering = false;
-            updateTimerState();
-          }
+    
+    const isButtonPress = name === "MOUSE_LEFT_BUTTON_PRESSED" || name === "MOUSE_LEFT_BUTTON_RELEASED";
+    
+    if (!isButtonPress) {
+      const targetRow = lastRow ?? terminal.height;
+      const hovered = hitTest(layouts, data.x, data.y, targetRow);
+      
+      if (hovered) {
+        const index = layouts.findIndex((item) => item.id === hovered.id);
+        if (index >= 0 && hoverIndex !== index) {
+          hoverIndex = index;
+          isMouseOverButtons = true;
+          render();
+        }
+        if (!isMouseOverButtons) {
+          isMouseOverButtons = true;
+        }
+      } else {
+        if (isMouseOverButtons) {
+          isMouseOverButtons = false;
+        }
+        if (hoverIndex !== -1) {
+          hoverIndex = -1;
+          render();
         }
       }
       return;
     }
+    
     const layout = hitTest(layouts, data.x, data.y, lastRow ?? terminal.height);
     if (!layout) {
       return;
@@ -290,6 +285,8 @@ export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt
     const index = layouts.findIndex((item) => item.id === layout.id);
     if (index >= 0) {
       focusedIndex = index;
+      hoverIndex = -1;
+      isMouseOverButtons = false;
       resolveAndCleanup(layout.id);
     }
   };
@@ -308,12 +305,59 @@ export function createChoicePrompt({ title }: ChoicePromptOptions): ChoicePrompt
       active = true;
       terminal.hideCursor();
       terminal.grabInput({ mouse: "motion" });
-      terminal.on("key", onKey);
+      
+      const keyHandler = (name: string) => {
+        if (!active) return;
+        
+        if (name === "TAB") {
+          focusedIndex = (focusedIndex + 1) % buttons.length;
+          hoverIndex = focusedIndex;
+          isMouseOverButtons = false;
+          render();
+          return;
+        }
+        if (name === "SHIFT_TAB") {
+          focusedIndex = (focusedIndex - 1 + buttons.length) % buttons.length;
+          hoverIndex = focusedIndex;
+          isMouseOverButtons = false;
+          render();
+          return;
+        }
+        if (name === "LEFT" || name === "ArrowLeft") {
+          focusedIndex = (focusedIndex - 1 + buttons.length) % buttons.length;
+          hoverIndex = focusedIndex;
+          isMouseOverButtons = false;
+          render();
+          return;
+        }
+        if (name === "RIGHT" || name === "ArrowRight") {
+          focusedIndex = (focusedIndex + 1) % buttons.length;
+          hoverIndex = focusedIndex;
+          isMouseOverButtons = false;
+          render();
+          return;
+        }
+        if (name === "ENTER" || name === "RETURN") {
+          resolveAndCleanup(buttons[focusedIndex].id);
+          return;
+        }
+        if (name === "ESCAPE" || name === "q" || name === "Q") {
+          resolveAndCleanup("back");
+          return;
+        }
+        if (name === "CTRL_C") {
+          active = false;
+          cleanup();
+          rejectChoice?.(new Error("choicePrompt cancelled"));
+        }
+      };
+      
+      terminal.on("key", keyHandler);
       terminal.on("mouse", onMouse);
       terminal.on("resize", onResize);
       render();
     }).finally(() => {
-      terminal.off("key", onKey);
+      terminal.off("key", () => {});
       terminal.off("mouse", onMouse);
       terminal.off("resize", onResize);
       cleanup();

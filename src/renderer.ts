@@ -1,11 +1,11 @@
-import chalk, { Chalk } from "chalk";
+import chalk from "chalk";
 import gradient from "gradient-string";
-import { createLogUpdate } from "log-update";
+import ora from "ora";
 import type { EventEmitter } from "node:events";
-import type { InstallerConfig, RendererOptions } from "./types.js";
+import type { InstallerConfig,RendererOptions } from "./types.js";
 import { formatDuration } from "./utils/time.js";
 
-type RenderState = {
+type RenderState={
   percent: number;
   stepTitle: string;
   stepIndex: number;
@@ -13,10 +13,21 @@ type RenderState = {
   completedWeight: number;
   totalWeight: number;
   startTime: number;
+  stepStatus: ("pending"|"success"|"error")[];
 };
 
-const BAR_WIDTH = 22;
-export const MARQUEE_WIDTH = 3;
+const BAR_WIDTH=22;
+
+const SPINNER_FRAMES=[
+  "⠋",
+  "⠙",
+  "⠹",
+  "⠸",
+  "⠼",
+  "⠴",
+  "⠦",
+  "⠧"
+];
 
 export function renderProgressLine(
   state: {
@@ -29,90 +40,66 @@ export function renderProgressLine(
   theme: InstallerConfig["theme"],
   options: { noColor: boolean; brandLabel: string; ui: InstallerConfig["ui"]; glowOffset?: number }
 ): string {
-  const chalkInstance = new Chalk({ level: options.noColor ? 0 : 3 });
-  const safePercent = Number.isFinite(state.percent) ? state.percent : 0;
-  const clampedPercent = Math.max(0, Math.min(100, safePercent));
-  const percentLabelValue = Math.round(clampedPercent);
+  const safePercent=Number.isFinite(state.percent)? state.percent:0;
+  const clampedPercent=Math.max(0,Math.min(100,safePercent));
+  const percentLabelValue=Math.round(clampedPercent);
 
-  const completeLength = Math.floor((percentLabelValue / 100) * BAR_WIDTH);
-  const useUnicode = options.ui.unicode;
-  const completeChar = useUnicode ? options.ui.barChars.full : "=";
-  const incompleteChar = useUnicode ? options.ui.barChars.empty : "-";
-  const glowChar = useUnicode ? options.ui.barChars.glow : "=";
-  const glowOffset = Math.max(0, options.glowOffset ?? 0);
-  const glowWidth = Math.max(0, options.ui.animation.glowWidth);
-  const glowEnd = glowWidth > 0 ? Math.min(completeLength, glowOffset + glowWidth) : 0;
-  const complete = Array.from({ length: completeLength }, (_, index) => {
-    if (glowWidth > 0 && index >= glowOffset && index < glowEnd) {
-      return glowChar;
-    }
-    return completeChar;
-  }).join("");
-  const incomplete = incompleteChar.repeat(BAR_WIDTH - completeLength);
+  const completeLength=Math.floor((percentLabelValue/100)*BAR_WIDTH);
+  const useUnicode=options.ui.unicode;
+  const completeChar=useUnicode? options.ui.barChars.full:"=";
+  const incompleteChar=useUnicode? options.ui.barChars.empty:"-";
+  const complete=completeChar.repeat(completeLength);
+  const incomplete=incompleteChar.repeat(BAR_WIDTH-completeLength);
 
-  const bar = `[${chalkInstance.hex(theme.barComplete)(complete)}${chalkInstance.hex(
-    theme.barIncomplete
-  )(incomplete)}]`;
-  const percentLabel = chalkInstance.hex(theme.accent)(`${percentLabelValue}%`);
-  const stepLabel = chalkInstance.hex(theme.accent)(
-    `Step ${state.stepIndex + 1}/${state.totalSteps}`
-  );
-  const titleLabel = chalkInstance.white(state.stepTitle);
-  const timer = chalkInstance.gray(formatDuration(state.elapsedMs));
-  const separator = useUnicode ? options.ui.separators.unicode : options.ui.separators.ascii;
+  const bar=`[${complete}${incomplete}]`;
+  const percentLabel=`${percentLabelValue}%`;
+  const stepLabel=`Step ${state.stepIndex+1}/${state.totalSteps}`;
+  const titleLabel=state.stepTitle;
+  const timer=formatDuration(state.elapsedMs);
+  const separator=useUnicode? options.ui.separators.unicode:options.ui.separators.ascii;
 
-  return `${options.brandLabel} ${bar} ${percentLabel}${separator}${stepLabel}${separator}${titleLabel} ${timer}`;
+  if (options.noColor) {
+    return `${options.brandLabel} ${bar} ${percentLabel}${separator}${stepLabel}${separator}${titleLabel} ${timer}`;
+  }
+
+  const coloredBar=`[${chalk.hex(theme.barComplete)(complete)}${chalk.hex(theme.barIncomplete)(incomplete)}]`;
+  const coloredPercent=chalk.hex(theme.accent)(percentLabel);
+  const coloredStep=chalk.hex(theme.accent)(stepLabel);
+  const coloredTitle=chalk.white(titleLabel);
+  const coloredTimer=chalk.gray.dim(timer);
+
+  return `${options.brandLabel} ${coloredBar} ${coloredPercent}${separator}${coloredStep}${separator}${coloredTitle} ${coloredTimer}`;
 }
 
-export function createRenderer(config: InstallerConfig, options: RendererOptions) {
-  const chalkInstance = new Chalk({ level: options.noColor ? 0 : 3 });
-  const useUnicode = config.ui.unicode;
-  const brandText = config.ui.brandLabel;
-  const brandLabel = options.noColor
-    ? brandText
-    : gradient(...config.theme.brand).multiline(brandText);
-  const separators = useUnicode ? config.ui.separators.unicode : config.ui.separators.ascii;
-  const baseDot = useUnicode ? "·" : ".";
-  const highlightDot = useUnicode ? "•" : "o";
-  const baseDotCell = options.noColor ? baseDot : chalkInstance.gray.dim(baseDot);
-  const highlightDotCell = options.noColor
-    ? highlightDot
-    : chalkInstance.hex(config.theme.accent)(highlightDot);
-  let frameIndex = 0;
+export function createRenderer(config: InstallerConfig,options: RendererOptions) {
+  const useUnicode=config.ui.unicode;
+  const brandText=config.ui.brandLabel;
+  const brandLabel=options.noColor
+     ? brandText
+     :gradient(...config.theme.brand).multiline(brandText);
+  const separators=useUnicode? config.ui.separators.unicode:config.ui.separators.ascii;
 
-  const update = createLogUpdate(process.stdout, { showCursor: false });
-  let hasRendered = false;
-  let paused = false;
-  let spinnerIndex = 0;
-  let glowOffset = 0;
-  let animationTimer: ReturnType<typeof setInterval> | null = null;
-  let lastLogMessage: string | null = null;
-  let lastLogLevel: "info" | "warn" | "error" | "success" = "info";
-  let lastStatusLabel: string | null = null;
-  const state: RenderState = {
+  let spinner: ReturnType<typeof ora> | null=null;
+  let progressInterval: ReturnType<typeof setInterval> | null=null;
+  let currentFrameIndex = 0;
+  let isRunning = false;
+  
+  let state: RenderState={
     percent: 0,
     stepTitle: "Starting",
     stepIndex: 0,
     totalSteps: config.steps.length,
     completedWeight: 0,
-    totalWeight: config.steps.reduce((sum, step) => sum + step.weight, 0),
-    startTime: Date.now()
+    totalWeight: config.steps.reduce((sum,step) => sum+step.weight,0),
+    startTime: Date.now(),
+    stepStatus: new Array(config.steps.length).fill("pending")
   };
 
-  const renderMarquee = () => {
-    const index = frameIndex % MARQUEE_WIDTH;
-    return Array.from({ length: MARQUEE_WIDTH }, (_, i) =>
-      i === index ? highlightDotCell : baseDotCell
-    ).join("");
-  };
-
-  function render() {
-    if (!options.isTTY || paused) {
-      return;
-    }
-
-    const elapsedMs = Date.now() - state.startTime;
-    const line = renderProgressLine(
+  function renderProgressToStdout() {
+    if (!isRunning) return;
+    
+    const elapsedMs=Date.now()-state.startTime;
+    const line=renderProgressLine(
       {
         percent: state.percent,
         stepTitle: state.stepTitle,
@@ -121,158 +108,266 @@ export function createRenderer(config: InstallerConfig, options: RendererOptions
         elapsedMs
       },
       config.theme,
-      { noColor: options.noColor, brandLabel, ui: config.ui, glowOffset }
+      { noColor: options.noColor,brandLabel,ui: config.ui }
     );
-    const spinner = useUnicode ? config.ui.spinnerFrames[spinnerIndex] ?? "" : "";
-    const baseLine = spinner ? `${spinner} ${line}` : line;
-    const marquee = renderMarquee();
-    const marqueePad = " ".repeat(MARQUEE_WIDTH + 1);
-    if (lastLogMessage) {
-      const statusColor =
-        lastLogLevel === "success"
-          ? config.theme.success
-          : lastLogLevel === "warn"
-            ? config.theme.warn
-            : lastLogLevel === "error"
-              ? config.theme.error
-              : config.theme.accent;
-      const labelText = lastStatusLabel ?? "STATUS";
-      const statusLabel = options.noColor
-        ? labelText
-        : chalkInstance.hex(statusColor)(labelText);
-      const stepJoiner = useUnicode ? " — " : " - ";
-      const statusLine = lastStatusLabel
-        ? `${statusLabel} | ${lastLogMessage}`
-        : `${statusLabel} | ${state.stepTitle}${stepJoiner}${lastLogMessage}`;
-      const progressLine = `${marquee} ${baseLine}`;
-      update([progressLine, `${marqueePad}${statusLine}`].join("\n"));
+    
+    const frame = SPINNER_FRAMES[currentFrameIndex % SPINNER_FRAMES.length];
+    if (options.isTTY) {
+      process.stdout.write(`\r${frame} ${line}`);
     } else {
-      update(`${marquee} ${baseLine}`);
+      console.log(`${frame} ${line}`);
     }
-    hasRendered = true;
   }
 
-  function startAnimation() {
-    if (!options.isTTY || animationTimer || paused) {
-      return;
+  function startSpinner() {
+    if(isRunning) return;
+    isRunning=true;
+    currentFrameIndex=0;
+    
+    progressInterval=setInterval(() => {
+      currentFrameIndex++;
+      renderProgressToStdout();
+    }, config.ui.animation.tickMs);
+    
+    if (!options.isTTY) {
+      console.log("");
     }
-    const frameTickMs = config.ui.animation.frameTickMs ?? config.ui.animation.tickMs;
-    animationTimer = setInterval(() => {
-      spinnerIndex = (spinnerIndex + 1) % config.ui.spinnerFrames.length;
-      const safePercent = Number.isFinite(state.percent) ? state.percent : 0;
-      const clampedPercent = Math.max(0, Math.min(100, safePercent));
-      const percentLabelValue = Math.round(clampedPercent);
-      const completeLength = Math.floor((percentLabelValue / 100) * BAR_WIDTH);
-      const maxGlowOffset = Math.max(0, completeLength - config.ui.animation.glowWidth);
-      glowOffset = maxGlowOffset > 0 ? (glowOffset + 1) % (maxGlowOffset + 1) : 0;
-      frameIndex += 1;
-      render();
-    }, frameTickMs);
+    renderProgressToStdout();
   }
 
-  function stopAnimation() {
-    if (!animationTimer) {
-      return;
+  function updateSpinner() {
+    if(!isRunning) return;
+    renderProgressToStdout();
+  }
+
+  function clearProgressLine() {
+    if (options.isTTY && isRunning) {
+      process.stdout.write("\r" + " ".repeat(process.stdout.columns || 100) + "\r");
     }
-    clearInterval(animationTimer);
-    animationTimer = null;
+  }
+
+  function stopSpinner() {
+    isRunning=false;
+    if (progressInterval) {
+      clearInterval(progressInterval);
+      progressInterval=null;
+    }
+    clearProgressLine();
   }
 
   function pause() {
-    paused = true;
-    stopAnimation();
+    isRunning=false;
   }
 
   function resume() {
-    paused = false;
-    startAnimation();
-    render();
+    isRunning=true;
+    currentFrameIndex=0;
+    renderProgressToStdout();
+    progressInterval=setInterval(() => {
+      currentFrameIndex++;
+      renderProgressToStdout();
+    }, config.ui.animation.tickMs);
   }
 
   function printLog(
-    level: "info" | "warn" | "error" | "success",
+    level: "info"|"warn"|"error"|"success",
     message: string,
     status?: { label?: string; message?: string }
   ) {
-    lastLogMessage = status?.message ?? message;
-    lastLogLevel = level;
-    lastStatusLabel = status?.label ?? null;
-    const icon =
-      level === "success"
-        ? chalkInstance.hex(config.theme.success)(useUnicode ? "✓" : "+")
-        : level === "warn"
-          ? chalkInstance.hex(config.theme.warn)(useUnicode ? "⚠" : "!")
-          : level === "error"
-            ? chalkInstance.hex(config.theme.error)(useUnicode ? "✖" : "x")
-            : chalkInstance.hex(config.theme.accent)(useUnicode ? "ℹ" : "i");
-
-    const line = `${icon} ${message}`;
-
-    if (options.isTTY) {
-      if (hasRendered) {
-        update.clear();
+    const getIcon = () => {
+      if (options.noColor) {
+        return level === "success" ? "[+]" : level === "warn" ? "[!]" : level === "error" ? "[x]" : "[i]";
       }
-      console.log(line);
-      render();
+      const color = level === "success" ? config.theme.success 
+        : level === "warn" ? config.theme.warn 
+        : level === "error" ? config.theme.error 
+        : config.theme.accent;
+      const symbol = useUnicode 
+        ? (level === "success" ? "✓" : level === "warn" ? "⚠" : level === "error" ? "✖" : "ℹ")
+        : (level === "success" ? "+" : level === "warn" ? "!" : level === "error" ? "x" : "i");
+      return chalk.hex(color)(symbol);
+    };
+
+    const icon=getIcon();
+    
+    if (options.noColor) {
+      if (options.isTTY && isRunning) {
+        clearProgressLine();
+        console.log(`${icon} ${message}`);
+        updateSpinner();
+      } else {
+        console.log(`${icon} ${message}`);
+      }
       return;
     }
-
-    console.log(line);
+    
+    const messageColor = level === "success" ? chalk.white(message) 
+      : level === "warn" ? chalk.yellow(message)
+      : level === "error" ? chalk.red(message)
+      : chalk.cyan(message);
+    
+    if (options.isTTY && isRunning) {
+      clearProgressLine();
+      console.log(`${icon} ${messageColor}`);
+      updateSpinner();
+    } else {
+      console.log(`${icon} ${messageColor}`);
+    }
   }
 
   function attach(emitter: EventEmitter) {
-    startAnimation();
-
-    emitter.on("step:start", (event) => {
-      state.stepTitle = event.step.title;
-      state.stepIndex = event.index;
-      state.completedWeight = event.completedWeight;
-      state.totalWeight = event.totalWeight;
-      state.percent = 0;
-      state.startTime = Date.now();
-      lastLogMessage = null;
-      lastStatusLabel = null;
-      render();
+    emitter.on("step:start",(event) => {
+      state.stepTitle=event.step.title;
+      state.stepIndex=event.index;
+      state.completedWeight=event.completedWeight;
+      state.totalWeight=event.totalWeight;
+      state.percent=0;
+      state.startTime=Date.now();
+      
+      if (isRunning) {
+        stopSpinner();
+      }
+      startSpinner();
     });
 
-    emitter.on("step:progress", (event) => {
-      state.stepTitle = event.step.title;
-      state.stepIndex = event.index;
-      state.completedWeight = event.completedWeight;
-      state.totalWeight = event.totalWeight;
-      state.percent = event.percent;
-      render();
+    emitter.on("step:progress",(event) => {
+      if(!isRunning) return;
+      state.stepTitle=event.step.title;
+      state.stepIndex=event.index;
+      state.completedWeight=event.completedWeight;
+      state.totalWeight=event.totalWeight;
+      state.percent=event.percent;
+      updateSpinner();
     });
 
-    emitter.on("step:log", (event) => {
-      if (options.verbose || event.level !== "info") {
-        printLog(event.level, event.message);
+    emitter.on("step:log",(event) => {
+      printLog(event.level,event.message);
+    });
+
+    emitter.on("step:result",(event) => {
+      if (options.isTTY && isRunning) {
+        clearProgressLine();
+      }
+      if (options.noColor) {
+        console.log(`  → ${event.result}`);
+      } else {
+        console.log(chalk.hex(config.theme.success).dim(`  → ${event.result}`));
+      }
+      if (options.isTTY && isRunning) {
+        updateSpinner();
       }
     });
 
-    emitter.on("step:success", (event) => {
-      printLog("success", `${event.step.title} completed`);
+    emitter.on("step:success",(event) => {
+      if(isRunning) {
+        stopSpinner();
+      }
+      state.stepStatus[event.index] = "success";
+      printLog("success",`${event.step.title} completed`);
     });
 
-    emitter.on("step:result", (event) => {
-      const message = event.result ? `${event.result}` : "";
-      if (message.trim().length === 0) {
+    emitter.on("step:error",(event) => {
+      state.stepStatus[event.index] = "error";
+      printLog("error",`${event.step.title} failed`);
+    });
+
+    function renderStepTimeline() {
+      const totalMs = Date.now() - state.startTime;
+      const hasErrors = state.stepStatus.some(s => s === "error");
+      const successCount = state.stepStatus.filter(s => s === "success").length;
+      
+      if (options.noColor) {
+        console.log("\n-- Installation Complete --\n");
+        state.stepStatus.forEach((s, i) => {
+          const name = config.steps[i].title;
+          const status = s === "success" ? "[OK]" : s === "error" ? "[FAIL]" : "[..]";
+          console.log(`  ${status}  ${name}`);
+        });
+        console.log(`\n  ${successCount}/${state.totalSteps} steps  -  ${Math.round(totalMs / 1000)}s\n`);
         return;
       }
-      printLog("success", `RESULT | ${message}`, { label: "RESULT", message });
-    });
+      
+      console.log(`\n${chalk.hex(config.theme.brand[0])(chalk.bold("━".repeat(50)))}`);
+      console.log(chalk.cyan("  ") + chalk.bold.white("Installation Complete") + chalk.cyan("  "));
+      console.log(chalk.hex(config.theme.brand[0])(chalk.bold("━".repeat(50))));
+      
+      const maxNameLen = Math.max(...config.steps.map(step => step.title.length));
+      const stepLines = state.stepStatus.map((s, i) => {
+        const name = config.steps[i].title;
+        const paddedName = name.padEnd(maxNameLen, " ");
+        
+        if (s === "success") {
+          return chalk.cyan("  ✓") + "  " + chalk.gray(paddedName);
+        }
+        if (s === "error") {
+          return chalk.red("  ✗") + "  " + chalk.red(paddedName);
+        }
+        return chalk.dim("  ○") + "  " + chalk.dim(paddedName);
+      });
+      
+      console.log("");
+      stepLines.forEach(line => console.log(line));
+      
+      console.log("");
+      console.log(chalk.gray("  ┌") + "─".repeat(40) + chalk.gray("┐"));
+      const statsLine = chalk.white(`  │  ${successCount}/${state.totalSteps} steps  •  ${Math.round(totalMs / 1000)}s`);
+      console.log(statsLine + " ".repeat(40 - (statsLine.length - 4)) + chalk.gray("│"));
+      console.log(chalk.gray("  └") + "─".repeat(40) + chalk.gray("┘"));
+      console.log("");
+    }
 
-    emitter.on("step:error", (event) => {
-      printLog("error", `${event.step.title} failed`);
-    });
-
-    emitter.on("run:complete", () => {
-      if (options.isTTY) {
-        update.done();
+    function renderSuccessAnimation(callback: () => void) {
+      if (options.noColor) {
+        callback();
+        return;
       }
-      stopAnimation();
+      
+      const isPiped = !process.stdout.isTTY;
+      if (isPiped) {
+        callback();
+        return;
+      }
+      
+      let frameIndex = 0;
+      const totalFrames = 16;
+      let lastOutput = "";
+      
+      const frames = ["▓░░░░░░░░░░░░░░░", "▓▓░░░░░░░░░░░░░░", "▓▓▓░░░░░░░░░░░░░", "▓▓▓▓░░░░░░░░░░░░", "▓▓▓▓▓░░░░░░░░░░", "▓▓▓▓▓▓░░░░░░░░░", "▓▓▓▓▓▓▓░░░░░░░░", "▓▓▓▓▓▓▓▓░░░░░░░", "▓▓▓▓▓▓▓▓▓░░░░░░", "▓▓▓▓▓▓▓▓▓▓░░░░░", "▓▓▓▓▓▓▓▓▓▓▓░░░░", "▓▓▓▓▓▓▓▓▓▓▓▓░░░", "▓▓▓▓▓▓▓▓▓▓▓▓▓░░", "▓▓▓▓▓▓▓▓▓▓▓▓▓▓░", "▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓"];
+      
+      const animate = () => {
+        const bar = frames[frameIndex];
+        const line = `\r  ${chalk.green("✓")} ${chalk.white(bar)} ${Math.round((frameIndex / totalFrames) * 100)}%`;
+        
+        if (lastOutput) {
+          process.stdout.write(`\r${" ".repeat(lastOutput.length)}\r`);
+        }
+        process.stdout.write(line);
+        lastOutput = line;
+        
+        frameIndex++;
+        if (frameIndex <= totalFrames) {
+          setTimeout(animate, 25);
+        } else {
+          process.stdout.write(`\r${" ".repeat(lastOutput.length)}\r`);
+          process.stdout.write("\n");
+          setTimeout(callback, 100);
+        }
+      };
+      
+      animate();
+    }
+
+    emitter.on("run:complete",() => {
+      if(spinner) {
+        spinner.stop();
+        spinner=null;
+      }
+      
+      renderSuccessAnimation(() => {
+        renderStepTimeline();
+      });
     });
   }
 
-  return { attach, pause, resume };
+  return { attach,pause,resume };
 }

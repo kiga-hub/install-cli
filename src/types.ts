@@ -19,7 +19,7 @@ export type UiConfig = {
 };
 
 export type StepLog = {
-  level: "info" | "warn" | "error" | "success";
+  level?: "info" | "warn" | "error" | "success";
   message: string;
 };
 
@@ -29,9 +29,11 @@ export type StepConfig = {
   weight: number;
   durationMs?: number;
   command?: string;
+  type?: "install" | "shell";
+  package?: string;
   cwd?: string;
   env?: Record<string, string>;
-  logs?: StepLog[];
+  logs?: (string | StepLog)[];
   result?: string;
 };
 

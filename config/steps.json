@@ -15,65 +15,64 @@
     "spinnerFrames": ["⟡", "⟢", "⟣", "⟤"],
     "barChars": { "full": "█", "empty": "░", "glow": "▓" },
     "separators": { "unicode": " • ", "ascii": " | " },
-    "animation": { "tickMs": 90, "glowWidth": 4 }
+    "animation": { "tickMs": 200, "glowWidth": 4 }
   },
   "steps": [
     {
       "id": "prepare",
-      "title": "Preparing",
+      "title": "Checking System",
       "weight": 1,
-      "durationMs": 800,
-      "result": "Env ready",
-      "logs": ["Checking environment"]
+      "type": "shell",
+      "result": "System check passed"
     },
     {
-      "id": "fetch",
-      "title": "Fetching packages",
-      "weight": 2,
-      "durationMs": 1200,
-      "result": "Fetched 32 packages"
-    },
-    {
-      "id": "cache",
-      "title": "Caching",
-      "weight": 2,
-      "durationMs": 900,
-      "result": "Cached 118MB"
-    },
-    {
-      "id": "deps",
-      "title": "Installing dependencies",
-      "weight": 3,
-      "durationMs": 2200,
-      "result": "Installed 214 modules"
-    },
-    {
-      "id": "audit",
-      "title": "Verifying integrity",
+      "id": "install-htop",
+      "title": "Installing htop",
       "weight": 1,
-      "durationMs": 700,
-      "result": "Integrity OK"
+      "type": "install",
+      "package": "htop",
+      "result": "htop installed successfully",
+      "logs": ["Detecting OS...", "Installing htop"]
     },
     {
-      "id": "build",
-      "title": "Building project",
+      "id": "install-vim",
+      "title": "Installing vim",
       "weight": 3,
-      "durationMs": 1400,
-      "result": "Built 12 bundles"
+      "type": "install",
+      "package": "vim",
+      "result": "vim installed successfully"
+    },
+    {
+      "id": "install-npm",
+      "title": "Installing nodejs",
+      "weight": 1,
+      "type": "install",
+      "package": "nodejs",
+      "result": "nodejs installed successfully"
+    },
+    {
+      "id": "install-lsblk",
+      "title": "Installing util-linux",
+      "weight": 3,
+      "type": "install",
+      "package": "util-linux",
+      "result": "util-linux installed successfully"
     },
     {
       "id": "opt",
-      "title": "Optimizing",
+      "title": "Installing git",
       "weight": 1,
-      "durationMs": 900,
-      "result": "Optimized output"
+      "type": "install",
+      "package": "git",
+      "result": "git installed successfully"
     },
     {
-      "id": "final",
-      "title": "Finalizing",
+      "id": "yarn",
+      "title": "Installing yarn",
       "weight": 1,
-      "durationMs": 800,
-      "result": "Ready to launch"
+      "type": "shell",
+      "command": "npm install --global yarn",
+      "result": "yarn installed successfully"
     }
   ]
 }

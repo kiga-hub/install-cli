@@ -7,6 +7,7 @@ import { createStepController } from "./controller/stepController.js";
 import { createRenderer } from "./renderer.js";
 import { createChoicePrompt } from "./ui/choicePrompt.js";
 import { isTTY } from "./utils/tty.js";
+import { detectOS, getInstallCommand, getOSDisplayName, getPackageManager } from "./utils/os.js";
 
 type CliOptions = {
   config?: string;
@@ -43,6 +44,18 @@ program
     const configPath = await resolveConfigPath(options.config);
     const config = await loadConfigFromFile(configPath);
 
+    const detectedOS = detectOS();
+    const osDisplayName = getOSDisplayName(detectedOS);
+    const packageManager = getPackageManager(detectedOS);
+
+    if (config.steps && config.steps.length > 0 && config.steps[0].id === "install-htop") {
+      config.steps[0].command = getInstallCommand(detectedOS, "htop");
+      config.steps[0].logs = [
+        { level: "info", message: `Detected OS: ${osDisplayName}` },
+        { level: "info", message: `Installing htop via ${packageManager}` }
+      ];
+    }
+
     if (options.dryRun) {
       printPlan(config);
       return;
@@ -60,7 +73,7 @@ program
     const promptChoice = process.env.CLI_PROMPT_CHOICE;
     const prompt = promptChoice
       ? { open: async () => promptChoice as "next" | "auto" | "back" }
-      : createChoicePrompt({ title: "Step complete" });
+      : createChoicePrompt({ title: "Step complete" }, Boolean(options.noColor));
 
     const controller = createStepController({
       config,

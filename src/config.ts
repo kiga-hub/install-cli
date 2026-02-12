@@ -36,6 +36,8 @@ const StepSchema = z.object({
   weight: z.number().positive().default(1),
   durationMs: z.number().int().positive().optional(),
   command: z.string().min(1).optional(),
+  type: z.enum(["install", "shell"]).optional(),
+  package: z.string().min(1).optional(),
   cwd: z.string().min(1).optional(),
   env: z.record(z.string()).optional(),
   logs: z.array(StepLogInputSchema).optional(),

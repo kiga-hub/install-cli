@@ -6,14 +6,14 @@ Installer-style CLI with a single-line progress bar, colorful emphasis, and stru
 
 ```bash
 npm install
-npm run dev -- install --config config/steps.json
+npm run dev -- install --config config/steps.json --verbose
 ```
 
 ## Build
 
 ```bash
 npm run build
-node dist/index.js install --config config/steps.json
+node dist/index.js install --config config/steps.json --verbose
 ```
 
 ## Config
@@ -54,3 +54,4 @@ Output includes Unicode symbols in the progress and status lines. Use `--no-colo
 - `--no-color`: disable ANSI colors
 - `--continue-on-error`: keep running after failures
 - `--speed <factor>`: speed up or slow down simulated steps
+# install-cli

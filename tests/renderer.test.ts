@@ -498,6 +498,31 @@ describe("renderer", () => {
   });
 
   describe("renderer marquee", () => {
+    it("renders a braille marquee prefix in unicode mode", () => {
+      const output = renderTtyOutput({ rows: 24 });
+      const progressLine = output.lines[0] ?? "";
+      expect(progressLine).toMatch(/^\p{Braille}\s/u);
+    });
+
+    it("renders a two-char marquee in ascii mode", () => {
+      const config = parseConfig({ steps: [{ id: "one", title: "One" }] });
+      const { emitter, update, restoreRows } = setupTtyRenderer({
+        rows: 24,
+        config: { ...config, ui: { ...config.ui, unicode: false } }
+      });
+      emitter.emit("step:progress", {
+        step: config.steps[0],
+        index: 0,
+        completedWeight: 0,
+        totalWeight: 1,
+        percent: 0
+      });
+      const output = stripAnsi(String(update.mock.calls.slice(-1)[0]?.[0] ?? ""));
+      expect(output).toMatch(/^[\.o]{2}\s/);
+      emitter.emit("run:complete");
+      restoreRows();
+    });
+
     it("renders a one-line marquee prefix", () => {
       const output = renderTtyOutput({ rows: 24 });
       const lines = output.lines;

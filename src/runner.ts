@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
-import type { InstallerConfig, RunnerOptions, StepConfig } from "./types.js";
+import type { InstallerConfig, RunnerOptions, StepConfig, StepLog } from "./types.js";
+import { detectOS, getInstallCommand, isPackageInstalled, getOSDisplayName } from "./utils/os.js";
 
 type StepEvent = {
   step: StepConfig;
@@ -54,7 +55,21 @@ export async function runSingleStep(
   });
 
   try {
-    if (step.command) {
+    if (step.type === "shell" && step.id === "prepare") {
+      await runSystemCheckStep(step, options, emitter, {
+        index,
+        totalWeight,
+        completedWeight,
+        total: config.steps.length
+      });
+    } else if (step.type === "install" && step.package) {
+      await runCommandStep(step, options, emitter, {
+        index,
+        totalWeight,
+        completedWeight,
+        total: config.steps.length
+      });
+    } else if (step.command) {
       await runCommandStep(step, options, emitter, {
         index,
         totalWeight,
@@ -111,9 +126,11 @@ async function runSimulatedStep(
 
   if (step.logs?.length) {
     const spacing = duration / (step.logs.length + 1);
-    step.logs.forEach((message, idx) => {
+    step.logs.forEach((log, idx) => {
+      const logMessage = typeof log === "string" ? log : log.message;
+      const logLevel = (log as StepLog).level || "info";
       setTimeout(() => {
-        emitter.emit("step:log", { level: "info", message, step, index: context.index });
+        emitter.emit("step:log", { level: logLevel, message: logMessage, step, index: context.index });
       }, spacing * (idx + 1));
     });
   }
@@ -142,14 +159,156 @@ async function runSimulatedStep(
   });
 }
 
+async function runSystemCheckStep(
+  step: StepConfig,
+  options: RunnerOptions,
+  emitter: EventEmitter,
+  context: { index: number; total: number; totalWeight: number; completedWeight: number }
+): Promise<void> {
+  const { execSync, spawn } = await import("node:child_process");
+
+  try {
+    const osRelease = execSync("cat /etc/os-release | grep PRETTY_NAME | cut -d'\"' -f2", { encoding: "utf-8" }).trim();
+    emitter.emit("step:log", { level: "info", message: `OS: ${osRelease}`, step, index: context.index });
+  } catch {
+    emitter.emit("step:log", { level: "info", message: `OS: Unknown`, step, index: context.index });
+  }
+
+  try {
+    const kernel = execSync("uname -r", { encoding: "utf-8" }).trim();
+    emitter.emit("step:log", { level: "info", message: `Kernel: ${kernel}`, step, index: context.index });
+  } catch {
+    emitter.emit("step:log", { level: "info", message: `Kernel: Unknown`, step, index: context.index });
+  }
+
+  try {
+    const arch = execSync("uname -m", { encoding: "utf-8" }).trim();
+    emitter.emit("step:log", { level: "info", message: `Architecture: ${arch}`, step, index: context.index });
+  } catch {
+    emitter.emit("step:log", { level: "info", message: `Architecture: Unknown`, step, index: context.index });
+  }
+
+  const internetCheck = spawn("curl -s --connect-timeout 5 https://www.baidu.com > /dev/null 2>&1 && echo 'online' || echo 'offline'", {
+    shell: true
+  });
+
+  let internetStatus = "unknown";
+  internetCheck.stdout.on("data", (data) => {
+    internetStatus = data.toString().trim();
+  });
+  internetCheck.on("close", (code) => {
+    const status = internetStatus === "online" ? "Connected" : "Disconnected";
+    emitter.emit("step:log", {
+      level: internetStatus === "online" ? "success" : "warn",
+      message: `Internet: ${status}`,
+      step,
+      index: context.index
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    setTimeout(() => {
+      resolve();
+    }, 2000);
+  });
+}
+
 async function runCommandStep(
   step: StepConfig,
   options: RunnerOptions,
   emitter: EventEmitter,
   context: { index: number; total: number; totalWeight: number; completedWeight: number }
 ): Promise<void> {
+  let command = (step.command && step.command.length > 0) ? step.command : "echo ''";
+  const os = detectOS();
+
+  if (step.type === "install" && step.package) {
+    if (os !== "unknown") {
+      command = getInstallCommand(os, step.package);
+      emitter.emit("step:log", {
+        level: "info",
+        message: `Detected ${getOSDisplayName(os)} - installing ${step.package}`,
+        step,
+        index: context.index
+      });
+      if (step.logs?.length) {
+        step.logs.forEach((log) => {
+          const logMessage = typeof log === "string" ? log : log.message;
+          const logLevel = (log as StepLog).level || "info";
+          emitter.emit("step:log", { level: logLevel, message: logMessage, step, index: context.index });
+        });
+      }
+    } else {
+      emitter.emit("step:log", {
+        level: "warn",
+        message: `Unsupported OS detected. Skipping package installation.`,
+        step,
+        index: context.index
+      });
+      return;
+    }
+  } else if (step.logs?.length) {
+    step.logs.forEach((log) => {
+      const logMessage = typeof log === "string" ? log : log.message;
+      const logLevel = (log as StepLog).level || "info";
+      emitter.emit("step:log", { level: logLevel, message: logMessage, step, index: context.index });
+    });
+  }
+
+  if (step.type === "shell" && step.id === "prepare") {
+    console.error("DEBUG: shell prepare detected");
+    const { execSync } = await import("node:child_process");
+    
+    try {
+      const osRelease = execSync("cat /etc/os-release | grep PRETTY_NAME | cut -d'\"' -f2", { encoding: "utf-8" }).trim();
+      emitter.emit("step:log", { level: "info", message: `OS: ${osRelease}`, step, index: context.index });
+      console.error("DEBUG: OS log emitted:", `OS: ${osRelease}`);
+    } catch {
+      emitter.emit("step:log", { level: "info", message: `OS: Unknown`, step, index: context.index });
+    }
+    
+    try {
+      const kernel = execSync("uname -r", { encoding: "utf-8" }).trim();
+      emitter.emit("step:log", { level: "info", message: `Kernel: ${kernel}`, step, index: context.index });
+    } catch {
+      emitter.emit("step:log", { level: "info", message: `Kernel: Unknown`, step, index: context.index });
+    }
+    
+    try {
+      const arch = execSync("uname -m", { encoding: "utf-8" }).trim();
+      emitter.emit("step:log", { level: "info", message: `Architecture: ${arch}`, step, index: context.index });
+    } catch {
+      emitter.emit("step:log", { level: "info", message: `Architecture: Unknown`, step, index: context.index });
+    }
+    
+    const internetCheck = spawn("curl -s --connect-timeout 5 https://www.baidu.com > /dev/null 2>&1 && echo 'online' || echo 'offline'", {
+      shell: true
+    });
+    
+    let internetStatus = "unknown";
+    internetCheck.stdout.on("data", (data) => {
+      internetStatus = data.toString().trim();
+    });
+    internetCheck.on("close", (code) => {
+      const status = internetStatus === "online" ? "Connected" : "Disconnected";
+      emitter.emit("step:log", {
+        level: internetStatus === "online" ? "success" : "warn",
+        message: `Internet: ${status}`,
+        step,
+        index: context.index
+      });
+    });
+    
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resolve();
+      }, 2000);
+    });
+    return;
+  }
+
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(step.command as string, {
+    const child = spawn(command, {
       shell: true,
       cwd: step.cwd ?? process.cwd(),
       env: { ...process.env, ...step.env }
@@ -166,7 +325,7 @@ async function runCommandStep(
       emitter.emit("step:log", { level: "info", message: line, step, index: context.index })
     );
     stderr?.on("line", (line) =>
-      emitter.emit("step:log", { level: "error", message: line, step, index: context.index })
+      emitter.emit("step:log", { level: "info", message: line, step, index: context.index })
     );
 
     let percent = 0;
@@ -191,10 +350,44 @@ async function runCommandStep(
       stdout?.close();
       stderr?.close();
     };
-    const finishResolve = () => {
+    const finishResolve = async () => {
       if (settled) return;
       settled = true;
       cleanup();
+
+      if (step.type === "install" && step.package) {
+        const os = detectOS();
+        if (os !== "unknown") {
+          const verifyCommand = isPackageInstalled(os, step.package);
+          try {
+            const { spawnSync } = await import("node:child_process");
+            const result = spawnSync("sh", ["-c", verifyCommand], { encoding: "utf-8" });
+            if (result.status === 0) {
+              emitter.emit("step:log", {
+                level: "success",
+                message: `Verified: ${step.package} is installed`,
+                step,
+                index: context.index
+              });
+            } else {
+              emitter.emit("step:log", {
+                level: "warn",
+                message: `Could not verify ${step.package} installation`,
+                step,
+                index: context.index
+              });
+            }
+            } catch {
+            emitter.emit("step:log", {
+              level: "warn",
+              message: `Could not verify ${step.package} installation`,
+              step,
+              index: context.index
+            });
+          }
+        }
+      }
+
       resolve();
     };
     const finishReject = (error: Error) => {

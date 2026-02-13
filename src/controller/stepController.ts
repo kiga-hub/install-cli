@@ -26,10 +26,13 @@ export function createStepController({
 
     let index = 0;
     let autoMode = forceAutoMode;
+    let stepFailed = false;
     while (index < config.steps.length) {
+      stepFailed = false;
       try {
         await runSingleStep(config, options, emitter, index);
       } catch (error) {
+        stepFailed = true;
         if (!options.continueOnError) {
           emitter.emit("run:error", { error });
           throw error;

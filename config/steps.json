@@ -65,14 +65,6 @@
       "type": "install",
       "package": "git",
       "result": "git installed successfully"
-    },
-    {
-      "id": "yarn",
-      "title": "Installing yarn",
-      "weight": 1,
-      "type": "shell",
-      "command": "npm install --global yarn",
-      "result": "yarn installed successfully"
     }
   ]
 }
